@@ -184,7 +184,7 @@ Evaluación offline con `python evaluate_rag.py --k 5 --offline` sobre `data/eva
 
 ```bash
 # 1) Clonar y configurar entorno
-git clone https://github.com/MikeHell84/Rag_X.git
+git clone https://github.com/miguelxlerion/Rag_X.git
 cd Rag_X
 cp .env.example .env   # completa OPENAI_API_KEY / ANTHROPIC_API_KEY, etc.
 

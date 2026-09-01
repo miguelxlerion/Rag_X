@@ -52,7 +52,7 @@ Las empresas medianas (50-500 empleados) acumulan miles de PDFs —contratos, ma
 ## Quick Start
 
 ```bash
-git clone https://github.com/MikeHell84/Rag_X.git
+git clone https://github.com/miguelxlerion/Rag_X.git
 cd Rag_X
 cp .env.example .env   # completa OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
 
