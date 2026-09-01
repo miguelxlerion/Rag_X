@@ -35,10 +35,26 @@ export const api = {
   activate: (id: number) => request<Agent>(`/agents/${id}/activate/`, { method: 'POST' }),
   deactivate: (id: number) => request<Agent>(`/agents/${id}/deactivate/`, { method: 'POST' }),
   testAgent: (id: number, probe?: string) =>
-    request<{ ok: boolean; response?: string; dim?: number; error?: string }>(`/agents/${id}/test/`, {
+    request<{ ok: boolean; response?: string; dim?: number; sample?: number[]; error?: string }>(`/agents/${id}/test/`, {
       method: 'POST',
       body: JSON.stringify({ probe })
     }),
+  testAgentConfig: (payload: {
+    provider: string
+    model: string
+    api_key?: string
+    base_url?: string
+    agent_type: string
+    temperature?: number
+    max_tokens?: number
+    embedding_dim?: number
+    probe?: string
+  }) =>
+    request<{ ok: boolean; response?: string; dim?: number; sample?: number[]; tokens?: number; error?: string }>('/agents/test-config/', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  freeModels: () => request<any[]>('/free-models/'),
   platformConfig: () => request<PlatformConfig>('/platform-config/'),
   savePlatformConfig: (c: PlatformConfig) =>
     request<PlatformConfig>('/platform-config/', { method: 'PUT', body: JSON.stringify(c) }),

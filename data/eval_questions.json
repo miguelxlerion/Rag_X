@@ -1,17 +1,47 @@
 [
   {
     "question": "¿Cuántos días de vacaciones tienen los empleados?",
-    "relevant_chunk_ids": [],
-    "expected_answer": "Los empleados tienen derecho a 22 días laborables de vacaciones anuales."
+    "relevant_chunk_ids": [1, 2],
+    "retrieved_chunk_ids": [1, 5, 2, 8, 10],
+    "expected_answer": "Los empleados tienen derecho a 22 días laborables de vacaciones anuales.",
+    "answer": "Los empleados tienen derecho a 22 días laborables de vacaciones al año, solicitables con 15 días de antelación [1].",
+    "contexts": ["Los empleados de la empresa tienen derecho a 22 días laborables de vacaciones al año. La solicitud debe presentarse con al menos 15 días de antelación ante el departamento de Recursos Humanos."],
+    "latency_ms": 1820
   },
   {
     "question": "¿Cuál es la política de trabajo remoto?",
-    "relevant_chunk_ids": [],
-    "expected_answer": "El trabajo remoto está permitido hasta 2 días por semana con autorización del responsable."
+    "relevant_chunk_ids": [3],
+    "retrieved_chunk_ids": [3, 7, 9, 11, 12],
+    "expected_answer": "El trabajo remoto está permitido hasta 2 días por semana con autorización del responsable.",
+    "answer": "El teletrabajo está permitido hasta dos días por semana, sujeto a aprobación del mánager directo y disponibilidad de 9:00 a 15:00 [3].",
+    "contexts": ["El teletrabajo está permitido hasta dos días por semana, sujeto a la aprobación del mánager directo. El empleado debe mantener disponibilidad durante el horario central de 9:00 a 15:00 horas y garantizar conexión VPN."],
+    "latency_ms": 2100
   },
   {
-    "question": "¿Cómo se solicitan los permisos?",
-    "relevant_chunk_ids": [],
-    "expected_answer": "Los permisos se solicitan a través del portal de RRHH con al menos 5 días de antelación."
+    "question": "¿Cómo se solicitan los permisos y cuál es el presupuesto de formación?",
+    "relevant_chunk_ids": [4, 5],
+    "retrieved_chunk_ids": [4, 5, 6, 13, 14],
+    "expected_answer": "Los permisos se solicitan a través de RRHH y el presupuesto de formación es de 1.500 euros por empleado.",
+    "answer": "Los gastos de viaje se reembolsan hasta 250 euros/día y el presupuesto anual de formación por empleado es de 1.500 euros [4].",
+    "contexts": ["Los gastos de viaje se reembolsan hasta un máximo de 250 euros por día. El presupuesto anual de formación por empleado es de 1.500 euros."],
+    "latency_ms": 1650
+  },
+  {
+    "question": "¿Qué medidas de seguridad son obligatorias?",
+    "relevant_chunk_ids": [6],
+    "retrieved_chunk_ids": [6, 2, 15, 16, 17],
+    "expected_answer": "Prohibido compartir credenciales, 2FA obligatorio y reportar incidentes al SOC en 4 horas.",
+    "answer": "Está prohibido compartir credenciales, el acceso a producción requiere 2FA y cualquier incidente debe reportarse al SOC en máximo 4 horas [6].",
+    "contexts": ["Está prohibido compartir credenciales de acceso. El acceso a los sistemas de producción requiere doble factor de autenticación (2FA). Cualquier incidente de seguridad debe reportarse al equipo de SOC en un máximo de 4 horas."],
+    "latency_ms": 3400
+  },
+  {
+    "question": "¿Cuál es el contacto de Recursos Humanos?",
+    "relevant_chunk_ids": [7],
+    "retrieved_chunk_ids": [7, 18, 19, 20, 21],
+    "expected_answer": "rrhh@empresa.com",
+    "answer": "Recursos Humanos: rrhh@empresa.com [7].",
+    "contexts": ["Recursos Humanos: rrhh@empresa.com — Seguridad: soc@empresa.com"],
+    "latency_ms": 980
   }
 ]

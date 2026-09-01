@@ -10,6 +10,7 @@ import {
   defaultModel,
   modelsFor
 } from '../types'
+import { IconExternal, IconPlug } from './Icon'
 
 interface Props {
   agent?: Agent | null
@@ -39,11 +40,24 @@ export default function AgentForm({ agent, onClose, onSaved }: Props) {
   const [removeKey, setRemoveKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
+  const [testOk, setTestOk] = useState<boolean | null>(null)
 
   useEffect(() => {
     setForm(agent ? { ...agent, api_key: '' } : { ...EMPTY })
     setRemoveKey(false)
+    setTestResult(null)
+    setTestOk(null)
   }, [agent])
+
+  // Guardar borrador en localStorage (para no perder claves al recargar)
+  useEffect(() => {
+    if (!agent) {
+      const draft = { ...form, api_key: '' } // nunca guardamos clave en localStorage
+      localStorage.setItem('rag_agent_draft', JSON.stringify(draft))
+    }
+  }, [form, agent])
 
   function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -63,6 +77,38 @@ export default function AgentForm({ agent, onClose, onSaved }: Props) {
       agent_type: agentType,
       model: defaultModel(f.provider, agentType)
     }))
+  }
+
+  async function testConfig() {
+    setTesting(true)
+    setTestResult(null)
+    setTestOk(null)
+    setError(null)
+    try {
+      const r = await api.testAgentConfig({
+        provider: form.provider,
+        model: form.model.trim(),
+        api_key: form.api_key || undefined,
+        base_url: form.base_url || undefined,
+        agent_type: form.agent_type,
+        temperature: Number(form.temperature),
+        max_tokens: Number(form.max_tokens),
+        embedding_dim: Number(form.embedding_dim),
+        probe: 'Hola, responde en una frase para probar la API.'
+      })
+      if (r.ok) {
+        setTestOk(true)
+        setTestResult(r.dim ? `OK · dimensión ${r.dim} · modelo ${form.model}` : `OK · ${r.response?.slice(0,120) ?? 'respuesta recibida'} · ${r.tokens ?? ''} tokens`)
+      } else {
+        setTestOk(false)
+        setTestResult(`ERROR · ${r.error ?? 'fallo'}`)
+      }
+    } catch (e) {
+      setTestOk(false)
+      setTestResult(`ERROR · ${(e as Error).message}`)
+    } finally {
+      setTesting(false)
+    }
   }
 
   async function save() {
@@ -159,29 +205,43 @@ export default function AgentForm({ agent, onClose, onSaved }: Props) {
           <label>Descripción
             <input value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="Uso previsto del agente" />
           </label>
-          <label>API Key <span className="hint">(exclusiva de este agente · se guarda cifrada)</span>
-            <input
-              type="password"
-              value={form.api_key ?? ''}
-              onChange={(e) => {
-                set('api_key', e.target.value)
-                if (e.target.value) setRemoveKey(false)
-              }}
-              placeholder={KEYLESS_PROVIDERS.includes(form.provider) ? 'no requiere clave' : `clave de ${PROVIDER_LABEL[form.provider]}`}
-              autoComplete="off"
-            />
+          <label>API Key <span className="hint">(exclusiva de este agente · se guarda cifrada · persiste en DB)</span>
+            <div style={{display:'flex', gap:8}}>
+              <input
+                type="password"
+                value={form.api_key ?? ''}
+                onChange={(e) => {
+                  set('api_key', e.target.value)
+                  if (e.target.value) setRemoveKey(false)
+                }}
+                placeholder={KEYLESS_PROVIDERS.includes(form.provider) ? 'no requiere clave (Ollama local)' : `clave de ${PROVIDER_LABEL[form.provider]}`}
+                autoComplete="off"
+                style={{flex:1}}
+              />
+              <button type="button" className="ghost" onClick={testConfig} disabled={testing || !form.model.trim()} style={{whiteSpace:'nowrap', padding:'8px 16px', display:'inline-flex', alignItems:'center', gap:6}}>
+                <IconPlug size={14} /> {testing ? 'Probando…' : 'Probar API'}
+              </button>
+            </div>
           </label>
+          {testResult && (
+            <p className={testOk ? 'ok' : 'err'} style={{padding:'8px 12px', borderRadius:8, border:`1px solid ${testOk?'var(--ok)':'var(--err)'}`, background: testOk ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)', fontSize:'0.78rem'}}>
+              {testResult}
+            </p>
+          )}
           {form.provider !== 'ollama' && (
             <p className="hint">
-              Esta clave es <strong>solo de este agente</strong>; no se comparte con otros.
+              Esta clave es <strong>solo de este agente</strong>; no se comparte. Se guarda cifrada y <strong>persiste en Postgres</strong> (volumen `pgdata`) — no necesitas re-escribirla al reiniciar.
               {!agent && ' Es obligatoria para crearlo.'}
             </p>
           )}
           {PROVIDER_KEY_URL[form.provider] && (
             <p className="hint">
-              <a href={PROVIDER_KEY_URL[form.provider]} target="_blank" rel="noreferrer">
-                Obtener API key de {PROVIDER_LABEL[form.provider]} ↗
+              <a href={PROVIDER_KEY_URL[form.provider]!} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:4}}>
+                Obtener API key de {PROVIDER_LABEL[form.provider]} <IconExternal size={12} />
               </a>
+              {(PROVIDER_KEY_URL[form.provider] ?? '').includes('groq') && ' · Gratis sin tarjeta'}
+              {(PROVIDER_KEY_URL[form.provider] ?? '').includes('aistudio') && ' · Gratis 15 RPM'}
+              {(PROVIDER_KEY_URL[form.provider] ?? '').includes('openrouter') && ' · Modelos :free gratis'}
             </p>
           )}
           {agent?.has_api_key && (

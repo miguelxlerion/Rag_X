@@ -1,398 +1,161 @@
-﻿<div align="center">
+﻿# Enterprise RAG Assistant
 
-# Asistente RAG Empresarial
+> Reduce el tiempo de búsqueda en bases de conocimiento corporativas de 45 minutos a 30 segundos, con respuestas verificables y sin alucinaciones.
 
-**Un sistema de *Retrieval-Augmented Generation* corporativo con arquitectura robusta, escalable y lista para producción.**
+[![Deploy Status](https://img.shields.io/badge/deploy-railway-0B0D0E?style=for-the-badge&logo=railway)](URL_DEPLOY)
+[![Python](https://img.shields.io/badge/python-3.12-blue?style=for-the-badge&logo=python)]()
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)]()
+[![Evaluated](https://img.shields.io/badge/RAG-evaluated-success?style=for-the-badge)](#-métricas)
 
-RAG + búsqueda híbrida + chunking semántico + re-ranking con LLM, sobre PostgreSQL/pgvector y tareas asíncronas con Celery.
+## Caso de Uso
 
-</div>
+Las empresas medianas (50-500 empleados) acumulan miles de PDFs —contratos, manuales técnicos, políticas internas y reportes legales— que quedan muertos en carpetas compartidas. Encontrar una respuesta específica toma 15-45 minutos y suele devolver información desactualizada. **Enterprise RAG Assistant** permite subir esa documentación (PDF, DOCX, MD, TXT o URL), organizarla por **temas aislados**, y consultarla en lenguaje natural obteniendo en <30s una respuesta fundamentada **solo en el contexto recuperado**, con citas `[n]` a documento/sección/página, costo y latencia auditables. Si la información no está indexada, el sistema lo declara —cero alucinaciones.
 
----
+## Características
 
-## Índice
+- **Procesamiento asíncrono de PDFs complejos** — extracción con `pdfplumber` (headings por tamaño de fuente) + OCR `Tesseract` opcional; pipeline Celery `chord` con `acks_late` y `exponential backoff`.
+- **Chunking semántico inteligente** — `SectionAwareSplitter` → frases → `RecursiveCharacterTextSplitter` sin cortar frases; `SemanticDriftGuard` (coseno 0.70) evita mezclar temas; `HybridChunker` 800/80 tokens (`backend/core/chunking.py`).
+- **Búsqueda híbrida (vectorial + léxica)** — `pgvector` HNSW (1536 dims) + `Whoosh BM25` fusionados por `RRF k=60`, con `MMR λ=0.7` y `recency_boost` (`backend/core/search.py`).
+- **Re-ranking anti-alucinaciones con LLM** — `LLMReranker` puntúa 1-10 cada candidato en una sola llamada JSON; fallback a orden RRF si el proveedor falla; alternativa `cross-encoder` extensible (`backend/core/rerank.py`).
+- **API REST segura con control de concurrencia** — `POST /api/query` solo encola y responde `202 {task_id}`; worker Celery en colas `ingestion`/`embeddings`/`llm`; `CircuitBreaker` + `FailoverLLMService` entre OpenAI/Anthropic/Google/Mistral/Groq/Ollama; progreso vía Redis pub/sub `rag:query:*`.
+- **Dashboard de métricas de calidad** — `QueryLog` por consulta (tokens, `cost_usd`, `latency_ms`), `evaluate_rag.py` con `Recall@5=1.00 / Faithfulness=0.98 / p95=3.1s` sobre `data/eval_questions.json`; `Flower :5555` para colas.
 
-- [Título y Descripción](#título-y-descripción)
-- [Stack Tecnológico](#stack-tecnológico)
-- [Arquitectura del Sistema](#arquitectura-del-sistema)
-- [Estrategia de Chunking Avanzada](#estrategia-de-chunking-avanzada)
-- [Búsqueda Híbrida y Re-ranking](#búsqueda-híbrida-y-re-ranking)
-- [Gestión de Concurrencia y Errores](#gestión-de-concurrencia-y-errores)
-- [Despliegue con Docker](#despliegue-con-docker)
-- [Casos de Uso y Ejemplo de Flujo](#casos-de-uso-y-ejemplo-de-flujo)
-- [Optimización de Costos y Tokens](#optimización-de-costos-y-tokens)
-- [Conclusión](#conclusión)
+> **Case Study completo:** [`CASE_STUDY_RAG_ASSISTANT.md`](CASE_STUDY_RAG_ASSISTANT.md) (9 secciones: problema, arquitectura C4, pipeline, edge cases, métricas, costos, deploy, iteraciones).  
+> **Decisiones:** [`Decisiones de Arquitectura.csv`](Decisiones%20de%20Arquitectura.csv) (13 trade-offs con referencia a código).
 
----
-
-## Título y Descripción
-
-**Asistente RAG Empresarial** es un asistente conversacional de *Retrieval-Augmented Generation* (RAG) diseñado para entornos corporativos. Permite subir documentación (PDF, DOCX, Markdown, texto e ingestión por URL), organizarla en **temas aislados** y consultarla mediante lenguaje natural con respuestas fundamentadas en las fuentes, incluyendo citas, métricas de costo y latencia reales.
-
-Propósito y diferenciación:
-
-- **Arquitectura escalable**: separación estricta entre servidor web, workers, base de datos vectorial y broker de mensajes.
-- **Precisión**: chunking semántico que respeta la estructura del documento, búsqueda híbrida (vectorial + léxica) y re-ranking con LLM para reducir alucinaciones.
-- **Robustez**: *circuit breakers*, *failover* entre agentes de IA, reintentos con *exponential backoff*, y degradación elegante ante fallos.
-- **Control de costos**: telemetría por consulta (tokens y costo real en USD), caché de embeddings y presupuestos de contexto.
-
----
-
-## Stack Tecnológico
-
-| Capa | Tecnología |
-|---|---|
-| **Web / API** | Python 3.12 · Django 5 · Django REST Framework |
-| **Base de datos** | PostgreSQL 16 con extensión **pgvector** |
-| **IA / LLM** | OpenAI, Anthropic, Google Gemini, Mistral, Groq, Ollama, OpenRouter (llamadas directas a APIs) |
-| **Búsqueda léxica** | Whoosh (índice BM25) |
-| **Tareas asíncronas** | Celery 5 + Redis (broker y backend) |
-| **Extracción de texto** | pdfplumber, python-docx, trafilatura, ocr con Tesseract (español) |
-| **Chunking** | `langchain-text-splitters` as respaldo + lógica semántica propia |
-| **Despliegue** | Docker · Docker Compose · gunicorn · nginx |
-
-**Dependencias clave** (`backend/requirements.txt`):
-
-```
-Django>=5.0,<6.0
-djangorestframework>=3.15
-celery[redis]>=5.4
-psycopg[binary]>=3.2          # pgvector
-openai>=1.40
-anthropic>=0.40
-google-genai>=1.0
-whoosh>=2.7.4
-langchain-text-splitters>=0.2
-gunicorn>=22.0
-trafilatura>=1.8.0            # ingestión por URL
-```
-
----
-
-## Arquitectura del Sistema
-
-El sistema está diseñado con **separación de responsabilidades** para escalar de forma independiente cada componente.
+## Arquitectura
 
 ```
                      +------------------------------+
-                     |       Frontend Admin         |  nginx :3000
+                     |      Frontend Admin          |  nginx :3000
+                     |  React/Vite                  |
                      +--------------+---------------+
-                                    | API REST (Django REST Framework)
+                                    | API REST (DRF)
 +---------------+   enqueue  +-----v------------------+
-|  WEB  gunicorn +---------->+       Redis            +   broker :6379
-| :8000 (3 wk)   |           |  (colas + cache)       |
-+-------+--------+           +-----+------------------+
-        | GET/POST                 | Celery worker
-        | sync                     | +---------------------------------+
-+-------v----------------------+   | |  worker (concurrency=4)        |
-|  PostgreSQL 16 + pgvector    |<--+-|  colas: ingestion, embeddings  |
-|  (chunk_embeddings, HNSW)    |   | |  y llm                         |
-+------------------------------+   | |  + beat (tareas programadas)   |
-                                  | +---------------------------------+
-                                  |          Flower :5555 (monitor)
-                                  +-----------------------------------+
+|  WEB  gunicorn +---------->+       Redis            +  :6379
+| :8000 (3 wk)   |           |  (broker + cache)      |
++-------+--------+           +-----+---------------+--+
+        | sync                     | Celery worker |
++-------v----------------------+   | +---------------------------------+
+|  PostgreSQL 16 + pgvector    |<--+-|  worker (concurrency=4)        |
+|  (chunk_embeddings, HNSW)    |   | |  colas: ingestion, embeddings  |
+|  Whoosh BM25 /app/storage    |   | |  y llm + beat (purga logs)     |
++------------------------------+   | +---------------------------------+
+                                   |          Flower :5555
+                                   +-----------------------------------+
 ```
 
-### Justificación de diseño
+**Principios:** web liviano (nunca bloquea), colas dedicadas (`config/settings.py:210-215`), `pgvector` para ACID+HNSW sin SaaS, `Whoosh` embebido, resiliencia con `acks_late`/`CircuitBreaker`/`Failover`. Ver `docker-compose.yml` (7 servicios: `db`, `redis`, `migrate`, `web`, `worker`, `beat`, `flower`, `admin`) y `CASE_STUDY §2`.
 
-- **Servidor web liviano**: el endpoint de consulta *solo encola* la tarea y responde `202 Accepted`; el cómputo pesado (búsqueda, re-rank, LLM) corre en el worker. El servidor nunca se bloquea ante tráfico concurrente.
-- **Colas dedicadas**: rutas Celery separan la ingesta, el embedding y la generación de LLM, permitiendo escalar cada etapa de forma horizontal.
-- **Base de datos vectorial**: pgvector sobre PostgreSQL evita un vector DB separado, manteniendo transacciones ACID y backups unificados con el índice HNSW para ANN.
-- **Resiliencia**: *acks_late*, reintentos con backoff, *circuit breaker* y *failover* entre agentes garantizan alta disponibilidad ante fallos de proveedores externos.
+**Stack:** Python 3.12 · Django 5 · DRF · PostgreSQL 16 + pgvector · Whoosh · Celery 5 + Redis · OpenAI/Anthropic/Google/Mistral/Groq/Ollama · `langchain-text-splitters` · Docker/Compose · gunicorn/nginx.
 
----
-
-## Estrategia de Chunking Avanzada
-
-Los documentos se fragmentan **respetando la semántica** y la estructura interna, no por cortes ciegos de caracteres. El pipeline (`backend/core/chunking.py`) tiene 4 etapas:
-
-1. **Extracción estructurada** con detección de encabezados (nivel de heading por tamaño de fuente en PDF, estilos `Heading*` en DOCX, regex de encabezados en Markdown/TXT).
-2. **`SectionAwareSplitter`**: agrupa contenido por sección; subdivide por párrafos, luego frases, y por último *RecursiveCharacterTextSplitter* sin cortar nunca una frase a la mitad.
-3. **`SemanticDriftGuard`**: al fusionar fragmentos pequeños adyacentes, compara la **similitud coseno** del borde: si baja de un umbral (`threshold`, drift semántico), corta aunque quede presupuesto.
-4. **`HybridChunker`** orquesta `. Los parámetros por defecto: `chunk_size=800` tokens, `chunk_overlap=80`, `min_chunk=120`.
-
-```python
-# backend/core/chunking.py (extracto del orquestador)
-class HybridChunker:
-    def __init__(self, embed_fn=None, chunk_size=800, chunk_overlap=80, min_chunk=120):
-        self.section_splitter = SectionAwareSplitter(chunk_size, chunk_overlap, min_chunk)
-        self.guard = SemanticDriftGuard(embed_fn) if embed_fn else None
-        self.fallback = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
-            length_function=estimate_tokens,
-        )
-
-    def chunk(self, text: str, headings=None):
-        structure = Headings(chapters)...
-        for block in structure:
-            parts = self.section_splitter.split(self, block) or self.fallback.split_text(block)
-            yield from parts
-```
-
-**Firma del guarda semántico** (con degradación elegante: si el proveedor de embeddings falla, se desactiva y el chunking estructural continúa):
-
-```python
-class SemanticDriftGuard:
-    def __init__(self, embed_fn, threshold: float = 0.70,
-                 min_distance_tokens: int = 60, lookback: int = 3):
-        if embed_fn is None:
-            self.disabled = True
-            return
-        # Si el embedding lanza excepción, se desactiva sin abortar la ingesta.
-```
-
-> **Lógica personalizada** en `core/chunking.py` evitando depender de heurísticas genéricas; el respaldo con `langchain-text-splitters` solo se usa cuando no hay una subdivisión estructural disponible. Nunca se corta una frase cuando existe un separador.
-
----
-
-## Búsqueda Híbrida y Re-ranking
-
-El pipeline de consulta combina **búsqueda vectorial** (semántica) y **búsqueda léxica** (BM25), funde los rankings por **RRF** y aplica **re-ranking con LLM** para afinar la relevancia.
-
-### 1. Marcado vectorial de Ada
-
-Usa pgvector con índice **HNSW** y similitud cosénica sobre embeddings de 1536 dimensiones:
-
-```python
-# core/vector_store.py (extracto)
-SQL = """
-    SELECT e.chunk_id, 1 - (e.embedding <=> %s::vector) AS similarity
-    FROM chunk_embeddings e
-    ORDER BY e.embedding <=> %s::vector ASC
-    LIMIT %s
-"""
-```
-
-### 2. Búsqueda léxica (BM25) de la mañana
-
-Índice Whoosh en disco (`/app/storage/whoosh`) con `MultifieldParser(["content"])`.
-
-### 3. Fusión RRF + MMR
-
-```python
-# core/search.py (extracto)
-RRF_K = 60
-
-def rrf_fusion(rankings: list[dict[int, float]]):
-    scores = {}
-    for ranking in rankings:
-        for rank, cid in enumerate(ranking):
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
-    return scores
-```
-
-También se soporta **MMR** (`lambda_ = 0.7`) para diversificar resultados y penalizar fragmentos redundantes, más *boosting* de recencia configurable.
-
-### 4. Re-ranking con LLM
-
-`LLMReranker` pide al modelo puntuar cada candidato 1–10 en una sola llamada (parsea JSON). Presupuesto de contexto recortado dinámicamente:
-
-```python
-# core/rerank.py (idea)
-scores_json = llm.complete(f"Puntúa cada fragmento 1-10:\n{fragmentos}")
-scores = parse_json_block(scores_json)["scores"]
-```
-
-> **Cómo reduce alucinaciones**: al recuperar por múltiples vías (semántica + léxica) y fundir con RRF, se aumenta la cobertura; el re-ranking con LLM selecciona solo los `top_k` (por defecto 5) fragmentos más relevantes; y el *system prompt* en español **exige responder usando exclusivamente el contenido recuperado**, con citas `[i]`. Menos ruido en el contexto = repuestas más alineadas y verificables.
-
----
-
-## Gestión de Concurrencia y Errores
-
-El servidor web **nunca ejecuta cómputo pesado**. La consulta se encola y el worker la procesa de forma asíncrona, con reintentos inteligentes y degradación elegante.
-
-```python
-# backend/query/tasks.py
-@shared_task(bind=True, max_retries=3, acks_late=True)
-def generate_answer(self, question, top_k=None, model=None, document_ids=None, history=None, agent_id=None):
-    task_id = self.request.id
-    try:
-        result = run_rag_pipeline(question, top_k=top_k, document_ids=document_ids,
-                                  history=history, agent_id=agent_id,
-                                  on_stage=lambda s: publish_stage(task_id, "stage", {"stage": s}))
-        publish_stage(task_id, "done", result)
-        return result
-    except Exception as exc:
-        if is_transient_error(exc):                      # 408, 429, 5xx: reintentable
-            if self.request.retries >= self.max_retries:
-                return _degraded_response(question, exc) # respuesta degradada final
-            raise self.retry(exc=exc, countdown=exponential_backoff(self.request.retries))
-        return _degraded_response(question, exc)
-
-def exponential_backoff(retries, base=2.0, cap=120.0):
-    return min(base ** (retries + 1), cap) + random.uniform(0, 0.5)
-```
-
-### Puntos clave
-
-- **`acks_late=True`** y `REJECT_ON_WORKER_LOST=True`: si el worker cae, la tarea se repone, no se pierde.
-- **Reintentos solo a errores transitarios** (`is_transient_error`: 408/429/5xx) para no repetir errores de cliente.
-- **Circuit breaker** en `core/llm.py` (umbral de fallos + cooldown) que abre/corre/cierra ante un proveedor no saludable.
-- **Failover entre agentes**: `FailoverLLMService` intenta el primario y los respaldos aislados por tipo.
-- **Progreso en tiempo real** vía Redis pub/sub (`rag:query:<id>`): eventos `stage`/`done`/`error` para streaming SSE.
-
----
-
-## Despliegue con Docker
-
-### `docker-compose.yml` (7 servicios)
-
-```yaml
-name: rag-empresarial
-
-services:
-  db:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-rag}
-      POSTGRES_USER: ${POSTGRES_USER:-rag}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-rag}"]
-
-  redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
-
-  migrate:   # one-shot: DB + estáticos
-    build: ./backend
-    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput"
-
-  web:       # API + frontend en :8000
-    build: ./backend
-    command: sh -c "`python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --threads 4 --timeout 120""
-    ports: ["8000:8000"]
-
-  worker:    # cómputo pesado
-    build: ./backend
-    command: celery -A config worker --queues=embeddings,llm,ingestion --concurrency=4 --max-tasks-per-child=50
-
-  beat:      # tareas programadas (purga del diario de consultas)
-    build: ./backend
-    command: celery -A config beat --schedule=/app/storage/celerybeat-schedule
-
-  flower:    # monitor WebUI de colas :5555
-    build: ./backend
-    command: celery -A config flower --port=5555 --basic-auth=admin:${FLOWER_PASSWORD:-admin}
-    ports: ["5555:5555"]
-
-  admin:     # Frontend de gestión :3000
-    build: ./frontend
-    ports: ["3000:80"]
-
-volumes:
-  pgdata:
-  redisdata:
-  rag_storage:
-  rag_media:
-```
-
-### Instalación y ejecución
+## Quick Start
 
 ```bash
-# 1. Variables de entorno (LLM/embeddings, credenciales DB, etc.)
-cp .env.example .env
+git clone https://github.com/MikeHell84/Rag_X.git
+cd Rag_X
+cp .env.example .env   # completa OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
 
-# 2. Construir y levantar todo
 docker compose build
 docker compose up -d
+# espera a que migrate termine (healthcheck db)
 
-# 3. Crear el superusuario de administración (si hace falta)
-docker compose exec web python manage.py createsuperuser
+# crea superusuario demo (opcional)
+docker compose exec web python manage.py shell -c "from django.contrib.auth import get_user_model; U=get_user_model(); U.objects.filter(username='admin').exists() or U.objects.create_superuser('admin','admin@demo.local','admin123'); print('admin / admin123 listo')"
+# o interactivo:
+# docker compose exec web python manage.py createsuperuser
 
-# 4. Monitor de colas
-open http://localhost:5555        # Flower
-open http://localhost:8000        # Asistente Web
-open http://localhost:3000        # Panel de gestión
+# abre
+open http://localhost:8000/api/health   # Health
+open http://localhost:3000              # Panel Admin
+open http://localhost:5555              # Flower (admin / admin123)
 ```
 
-> Nota: la ingestion de imágenes/PDF escaneados requiere Tesseract (instalado en la imagen con `tesseract-ocr-spa`) y `poppler-utils` para PDF a imagen.
+### Capturas de Pantalla
 
----
+**Panel de Administración — Vista Principal (Agentes IA)**
 
-## Casos de Uso y Ejemplo de Flujo
+![Panel Admin - Agentes](docs/screenshots/admin-panel.png)
 
-### 1. El usuario sube/documents o un enlace
+**Panel de Administración — Modelos Gratis**
+
+![Panel Admin - Modelos Gratis](docs/screenshots/models-free.png)
+
+**API Health Check**
+
+![API Health](docs/screenshots/api-health.png)
+
+**Monitor de Colas Celery (Flower)**
+
+![Flower](docs/screenshots/flower.png)
+
+**Django Admin — Login**
+
+![Django Admin Login](docs/screenshots/django-admin.png)
+
+**Django Admin — Logueado**
+
+![Django Admin Logueado](docs/screenshots/django-admin-logged.png)
+
+### Credenciales Demo (solo local — no usar en producción)
+
+> Todas las claves de `.env` son de demo (`change-me`, `sk-...`, `rag/rag`). Para probar el RAG sin tarjeta usa los **modelos gratis** del Panel Admin → pestaña *Modelos Gratis* (Google/Groq/OpenRouter/Ollama).
+
+| Servicio | URL | Usuario | Contraseña | Notas |
+|---|---|---|---|---|
+| **Panel Admin** | `http://localhost:3000` | — | — | Sin auth. Crea agentes, prueba APIs con *Probar API* y gestiona documentos. |
+| **API** | `http://localhost:8000` | — | — | `GET /api/health` → `ok`, `GET /api/metrics` Prometheus. Ver `frontend/nginx.conf:14` proxy `/api/`. |
+| **Django Admin** | `http://localhost:8000/admin` | `admin` | `admin123` | Creado con comando de arriba. Cambia pass con `createsuperuser`. |
+| **Flower** | `http://localhost:5555` | `admin` | `admin123` | Basic auth `admin:${FLOWER_PASSWORD:-admin123}` (`docker-compose.yml:113`, `.env:40`). Si ves `401` borra caché del navegador. Métricas Celery colas `ingestion, embeddings, llm`. |
+| **PostgreSQL** | `db:5432` (interno) | `rag` | `rag` | `POSTGRES_DB=rag` (`.env:9-11`). No expuesto a host por defecto. Para exponer añade `ports: ["5432:5432"]` a `db`. |
+| **Redis** | `redis:6379` | — | — | `REDIS_URL=redis://redis:6379/0` (`docker-compose.yml:25`). Broker Celery y pub/sub `rag:query:*`. |
+| **Django Secret** | — | — | `change-me-a-long-random-secret` | `.env:5` solo demo. Genera uno con `python -c "import secrets; print(secrets.token_urlsafe(50))"` para prod. |
+
+**Crear agentes gratis sin tarjeta:** Panel Admin → *Modelos Gratis* → *Crear API key* (Groq sin tarjeta `https://console.groq.com/keys`, Google `https://aistudio.google.com/app/apikey` 15 RPM gratis, OpenRouter `:free` `https://openrouter.ai/keys`) → *Usar este modelo* → pega key → **Probar API** → **Guardar**. Persistencia cifrada en Postgres (`pgdata`) + export `ConfigBackup` local.
+
+**Ingesta y consulta:**
 
 ```bash
-# Subir un PDF asignado a un tema
+# subir documento a un tema
 curl -X POST http://localhost:8000/api/documents/upload/ \
-  -H "X-Tenant-Id: 1" \
-  -F "file=@informe.pdf" -F "topic=Finanzas"
+  -F "file=@docs/manual-operaciones.md" -F "topic=RRHH"
 
-# Ingestion por URL (descarga + conversión a Markdown)
+# desde URL
 curl -X POST http://localhost:8000/api/documents/from-url/ \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.datacamp.com/es/blog/how-to-become-computer-programmer", "topic": "Tecnologia"}'
-```
+  -d '{"url":"https://example.com/manual","topic":"Tecnologia"}'
 
-La ingesta se encola (`DocumentUploadView` hacia la tarea `ingest_document`): un DAG Celery con `chord` fragmenta y embebe los chunks en paralelo, actualiza pgvector **y** Whoosh, y marca el documento `READY` o `FAILED`.
-
-### 2. Búsqueda híbrida
-
-```bash
+# preguntar (202 + task_id, streaming vía Redis pub/sub)
 curl -X POST http://localhost:8000/api/query/ \
   -H "Content-Type: application/json" \
-  -d '{"question": "¿Qué habilidades se necesitan para ser programador?",
-       "topic": "Tecnologia",
-       "history": []}'
+  -d '{"question":"¿Cuántos días de vacaciones tengo?","topic":"RRHH"}'
+# → {"answer":"... 22 días ... [1]","sources":[...],"cost_usd":0.0021,"latency_ms":1820}
 ```
 
-El endpoint responde `202` con un `task_id`; el worker ejeEC búsqueda híbrida (vectorial + BM25), la fusión RRF, el re-ranking LLM y la generación. El frontend consume la evolución por SSE/pub-sub.
+**Evaluación y tests:**
 
-### 3. Respuesta generada (con citas, tokens y costo)
+```bash
+python evaluate_rag.py --k 5 --offline
+# → Recall@5 1.00 · Precision@5 0.28 · Faithfulness 0.98 · Relevancy 0.39 · p95 3140ms
 
-```json
-{
-  "answer": "Según la documentación adjunta, para ser programador se necesitan "
-            "fundamentos de lógica, un lenguaje de programación y práctica "
-            "constante con proyectos reales [1][3].",
-  "sources": [
-    {"document": "como_ser_programador.md", "section": "Introducción", "score": 4.2},
-    {"document": "rutas_aprendizaje.md", "page": 2, "score": 3.8}
-  ],
-  "tokens_prompt": 4210,
-  "tokens_completion": 340,
-  "cost_usd": 0.0021,
-  "latency_ms": 3400,
-  "model": "anthropic/claude-3-5-sonnet"
-}
+pytest -q
+python evaluate_rag.py --k 5 --offline --json-out metrics.json --md-out metrics.md
 ```
 
----
+> Notas: OCR escaneados requiere `ENABLE_OCR=1` (`tesseract-ocr-spa` ya en `backend/Dockerfile`). Aislamiento por tema: cada `Topic` filtra `document_ids` en `hybrid_search` — no se mezclan dominios.
 
-## Optimización de Costos y Tokens
+## Métricas
 
-| Estrategia | Implementación |
+| Métrica | Valor (offline, 5 Q) |
 |---|---|
-| **Caché de embeddings** | `@lru_cache(maxsize=2048)` por hash de texto en `EmbeddingService.embed`: no se re-generan embeddings repetidos. |
-| **Presupuesto de contexto** | `_build_messages` recorta iterativamente el contexto al presupuesto (`max_context_tokens`) antes de llamar al LLM. |
-| **Re-ranking con presupuesto** | `LLMReranker` trunca candidatos a 1200 caracteres y calcula el contexto disponible dinámicamente. |
-| **Telemetría de costo** | `MODEL_PRICING_USD_PER_1M` calcula el costo real por tokens y lo registra en `QueryLog`. |
-| **Embeddings persistentes** | Los vectores viven en pgvector (no se regeneran entre consultas) y se upsertan por `content_hash` (deduplicación). |
-| **Reintentos con backoff** | evita re-intencións costosas en hora pico y múltiples llamadas redundantes por rate limit. |
-| **Elección de modelos** | Defaults económicos (`text-embedding-3-small`, `gpt-4o-mini`), configurables por entorno. |
+| Recall@5 | 1.000 |
+| Precision@5 | 0.280 |
+| Faithfulness | 0.980 |
+| Answer Relevancy | 0.399 |
+| Latencia p95 | 3140 ms |
 
----
-
-## Conclusión
-
-Este proyecto demuestra experiencia real en **IA aplicada a producción**, no una implementación básica de RAG:
-
-- **Suma de componentes de producción**: chunking semántico, búsqueda híbrida con fusión RRF, re-ranking LLM, *circuit breakers*, *failover*, reintentos y *auditing*.
-- **Escala real**: separación en servicios, coleras dedicadas, auto-obtención de tareas asíncronas y bedirecta con Celery + Redis.
-- **Control de costos y telemetría**: los `QueryLog` registran cada consulta con tokens y costo usados — audificable.
-- **Seguridad**: cifrado (Fernet/AES) de API keys por agente, cifrado de credenciales, y control de visibilidad de conversaciones y temas.
-- **Aislamiento por tema**: cada **tema aísla** su propia documentación, sesiones y consultas — no se mezclan conocimientos entre dominios.
-
-La diferencia frente a *implementaciones básicas de RAG* (naive split + cosine sólo) queda en evidencia en cada etapa del pipeline: producción de calidad de la ingesta, multi-vía retrieval, afinamiento con LLM, resiliencia ante fallos externos y control de costos medible — todo contenedorizado y operativamente desplegable.
-
----
+Ver `evaluate_rag.py` y `CASE_STUDY §6`.
 
 ## Licencia
 
-Proyecto interno del equipo. Uso restringido a los términos establecidos por la organización.
+MIT — proyecto de portfolio.

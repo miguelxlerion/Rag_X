@@ -102,11 +102,23 @@ export const KEYLESS_PROVIDERS: AgentProvider[] = ['ollama']
 
 export const PROVIDER_KEY_URL: Partial<Record<AgentProvider, string>> = {
   openai: 'https://platform.openai.com/api-keys',
-  anthropic: 'https://console.anthropic.com/settings/api-keys',
+  anthropic: 'https://console.anthropic.com/settings/keys',
   google: 'https://aistudio.google.com/app/apikey',
   mistral: 'https://console.mistral.ai/api-keys',
   groq: 'https://console.groq.com/keys',
-  openrouter: 'https://openrouter.ai/keys'
+  openrouter: 'https://openrouter.ai/keys',
+  ollama: 'https://ollama.com/download'
+}
+
+export const PROVIDER_DOCS_URL: Partial<Record<AgentProvider, string>> = {
+  openai: 'https://platform.openai.com/docs/models',
+  anthropic: 'https://docs.anthropic.com/en/docs/models-overview',
+  google: 'https://ai.google.dev/gemini-api/docs/models',
+  mistral: 'https://docs.mistral.ai/getting-started/models/',
+  groq: 'https://console.groq.com/docs/models',
+  openrouter: 'https://openrouter.ai/models?filter=free',
+  ollama: 'https://ollama.com/library',
+  custom: 'https://huggingface.co/settings/tokens'
 }
 
 export const MODELS_BY_PROVIDER: Record<AgentProvider, { chat: string[]; embedding: string[] }> = {
@@ -135,7 +147,7 @@ export const MODELS_BY_PROVIDER: Record<AgentProvider, { chat: string[]; embeddi
     embedding: ['nomic-embed-text', 'mxbai-embed-large', 'bge-m3']
   },
   openrouter: {
-    chat: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct'],
+    chat: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-2.0-flash-exp:free', 'qwen/qwen-2.5-72b-instruct:free', 'mistralai/mistral-7b-instruct:free'],
     embedding: []
   },
   custom: {
@@ -151,4 +163,19 @@ export function defaultModel(provider: AgentProvider, agentType: AgentType): str
 
 export function modelsFor(provider: AgentProvider, agentType: AgentType): string[] {
   return MODELS_BY_PROVIDER[provider][agentType === 'embedding' ? 'embedding' : 'chat'].filter((m) => m !== '')
+}
+
+export interface FreeModel {
+  name: string
+  type: 'chat' | 'embedding'
+  free: boolean
+  desc: string
+}
+export interface FreeCatalogEntry {
+  provider: AgentProvider | string
+  label: string
+  key_url: string
+  docs_url: string
+  free_note: string
+  models: FreeModel[]
 }
